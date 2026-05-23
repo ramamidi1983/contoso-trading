@@ -2,17 +2,111 @@
 
 Multi-service order processing platform for testing Azure SRE Agent. Deploys 5 services with a database, message queue, and monitoring — then break things and see if the agent can diagnose them.
 
+Supports two deployment modes: **standard** (public endpoints) and **VNet-integrated** (private, network-isolated).
+
 ## Architecture
 
+### Standard Mode (`enableVnet=false`)
+
+All services have public endpoints. Simple to deploy and test.
+
 ```
-User → Frontend (App Service) → Gateway (Container App) → Order Service → PostgreSQL
-                                                        → Payment Service → PostgreSQL
-                                                        → Service Bus → Worker
+                    ┌─────────────────────────────────────────────┐
+                    │              Azure Resource Group            │
+                    │                                             │
+  Internet ───────►│  Frontend ──► Gateway ──► Order Service      │
+                    │  (Container   (Container   (Container       │
+                    │   App)         App)         App)            │
+                    │                  │                          │
+                    │                  ├──► Payment Service       │
+                    │                  │    (Container App)       │
+                    │                  │                          │
+                    │                  └──► Service Bus ──► Worker│
+                    │                                    (Cont.App)│
+                    │                                             │
+                    │              PostgreSQL                     │
+                    │         (public access)                     │
+                    │                                             │
+                    │    Log Analytics + App Insights             │
+                    └─────────────────────────────────────────────┘
 ```
+
+### VNet-Integrated Mode (`enableVnet=true`, default)
+
+All services are inside a Virtual Network with no public endpoints. Azure Firewall controls egress traffic. Only reachable from within the VNet (e.g., by SRE Agent with VNet connection).
+
+```
+                    ┌─────────────────────────────────────────────────────┐
+                    │                   Virtual Network (10.0.0.0/16)     │
+                    │                                                     │
+                    │  ┌──────────────────────────────────────────┐       │
+                    │  │ snet-cae (10.0.0.0/21)                   │       │
+                    │  │  Container Apps Environment (internal)   │       │
+                    │  │                                          │       │
+                    │  │  Frontend ──► Gateway ──► Order Service  │       │
+                    │  │                  ├──► Payment Service    │       │
+                    │  │                  └──► Service Bus ──► Worker     │
+                    │  └──────────────────────────────────────────┘       │
+                    │                                                     │
+                    │  ┌─────────────────────┐  ┌──────────────────┐     │
+                    │  │ snet-pg (10.0.9.0/24)│  │ AzureFirewall    │     │
+                    │  │  PostgreSQL          │  │ Subnet           │     │
+                    │  │  (delegated, no      │  │ (10.0.11.0/26)  │     │
+                    │  │   public access)     │  │                  │     │
+                    │  └─────────────────────┘  │  ┌────────────┐  │     │
+                    │                            │  │ Azure      │  │     │
+                    │  ┌─────────────────────┐  │  │ Firewall   │──┼──►Internet
+                    │  │ snet-pe             │  │  │ (egress    │  │  (filtered)
+                    │  │ (10.0.10.0/24)      │  │  │  control)  │  │     │
+                    │  │ Private Endpoints   │  │  └────────────┘  │     │
+                    │  └─────────────────────┘  └──────────────────┘     │
+                    │                                                     │
+                    │  ┌─────────────────────────────────────────┐       │
+                    │  │  Private DNS Zones                       │       │
+                    │  │  *.thankful...azurecontainerapps.io      │       │
+                    │  │  *.private.postgres.database.azure.com   │       │
+                    │  └─────────────────────────────────────────┘       │
+                    │                                                     │
+                    │    Log Analytics + App Insights (public data plane) │
+                    └─────────────────────────────────────────────────────┘
+
+  SRE Agent ─── VNet Connection (snet-sre-agent, 10.0.12.0/28) ──► VNet
+```
+
+### VNet Subnets
+
+| Subnet | CIDR | Purpose | Delegation |
+|--------|------|---------|------------|
+| `snet-cae` | 10.0.0.0/21 | Container Apps Environment (all 5 services) | — |
+| `snet-pg` | 10.0.9.0/24 | PostgreSQL Flexible Server | `Microsoft.DBforPostgreSQL/flexibleServers` |
+| `snet-pe` | 10.0.10.0/24 | Private Endpoints (future use) | — |
+| `AzureFirewallSubnet` | 10.0.11.0/26 | Azure Firewall | — (Azure-required name) |
+| `snet-sre-agent` | 10.0.12.0/28 | SRE Agent VNet connection | `Microsoft.App/environments` |
+
+### Azure Firewall
+
+When VNet is enabled, Azure Firewall provides:
+
+- **Egress filtering** — internal services have no public IPs but need outbound access to pull container images (ACR/MCR), send telemetry (Azure Monitor), and reach Azure management APIs
+- **Single egress IP** — all outbound traffic exits through the firewall's public IP, giving a known static IP for allowlisting and audit
+- **Network rules** — allow outbound from 10.0.0.0/16 to required Azure services
+- **Application rules** — allow FQDNs for ACR, MCR, Azure Monitor, Container Apps management
+
+### Control Plane vs Data Plane
+
+| Access Type | Without VNet Connection | With VNet Connection |
+|-------------|------------------------|---------------------|
+| `az containerapp list` (control plane) | Works | Works |
+| `az containerapp restart` (control plane) | Works | Works |
+| `curl frontend/health` (data plane) | **Blocked** — DNS won't resolve | Works |
+| `psql pg-*` (data plane) | **Blocked** — no public access | Works |
+| App Insights queries (data plane) | Works (public API) | Works |
+
+## Services
 
 | Service | Type | Role |
 |---------|------|------|
-| Frontend | App Service (Node.js) | User-facing web UI |
+| Frontend | Container App (Node.js) | User-facing web UI, routes to gateway |
 | Gateway | Container App (.NET) | Routes requests to backend services |
 | Order Service | Container App (.NET) | Creates orders, publishes to queue |
 | Payment Service | Container App (.NET) | Processes payments |
@@ -23,9 +117,46 @@ User → Frontend (App Service) → Gateway (Container App) → Order Service �
 
 ## Deploy
 
+### Standard (public endpoints)
+
+```bash
+azd up
+# When prompted, set enableVnet=false
+```
+
+Or set it via environment variable:
+
+```bash
+azd env set enableVnet false
+azd up
+```
+
+### VNet-Integrated (default)
+
 ```bash
 azd up
 ```
+
+After deployment, create the private DNS zone and SRE Agent subnet:
+
+```bash
+# Get CAE domain and static IP
+CAE_DOMAIN=$(az containerapp env show -n env-<suffix> -g <rg> --query properties.defaultDomain -o tsv)
+CAE_IP=$(az containerapp env show -n env-<suffix> -g <rg> --query properties.staticIp -o tsv)
+
+# Create private DNS zone + wildcard record + VNet link
+az network private-dns zone create -g <rg> -n $CAE_DOMAIN
+az network private-dns record-set a add-record -g <rg> -z $CAE_DOMAIN -n "*" -a $CAE_IP
+VNET_ID=$(az network vnet show -g <rg> -n vnet-<suffix> --query id -o tsv)
+az network private-dns link vnet create -g <rg> -z $CAE_DOMAIN -n cae-dns-link -v $VNET_ID -e false
+
+# Create subnet for SRE Agent VNet connection
+az network vnet subnet create -g <rg> --vnet-name vnet-<suffix> \
+  -n snet-sre-agent --address-prefix 10.0.12.0/28 \
+  --delegations Microsoft.App/environments
+```
+
+Then in the SRE Agent portal, connect to the VNet using `snet-sre-agent`.
 
 ## Break-it Scenarios
 

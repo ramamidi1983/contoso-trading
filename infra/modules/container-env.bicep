@@ -3,6 +3,7 @@ param suffix string
 param tags object
 param lawClientId string
 param lawClientKey string
+param caeSubnetId string = ''
 
 resource env 'Microsoft.App/managedEnvironments@2024-03-01' = {
   name: 'env-${suffix}'
@@ -16,6 +17,10 @@ resource env 'Microsoft.App/managedEnvironments@2024-03-01' = {
         sharedKey: lawClientKey
       }
     }
+    vnetConfiguration: !empty(caeSubnetId) ? {
+      infrastructureSubnetId: caeSubnetId
+      internal: true
+    } : null
   }
 }
 

@@ -4,7 +4,7 @@ targetScope = 'subscription'
 param environmentName string
 
 @description('Primary location')
-param location string = 'eastus2'
+param location string = 'westus2'
 
 @description('Enable Dynatrace OneAgent auto-instrumentation on Container Apps')
 param enableDynatrace bool = false
@@ -15,6 +15,9 @@ param dtEnvironmentUrl string = ''
 @description('Dynatrace API token (needs openTelemetryTrace.ingest + metrics.ingest + logs.ingest scopes)')
 @secure()
 param dtApiToken string = ''
+
+@description('Enable VNet integration for all services')
+param enableVnet bool = true
 
 var tags = { 'azd-env-name': environmentName }
 var rgName = 'rg-${environmentName}'
@@ -33,6 +36,29 @@ resource rg 'Microsoft.Resources/resourceGroups@2021-04-01' = {
   name: rgName
   location: location
   tags: tags
+}
+
+// ── Virtual Network ──
+
+module vnet 'modules/vnet.bicep' = if (enableVnet) {
+  name: 'vnet'
+  scope: rg
+  params: { location: location
+    suffix: suffix
+    tags: tags }
+}
+
+// ── Azure Firewall ──
+
+module firewall 'modules/firewall.bicep' = if (enableVnet) {
+  name: 'firewall'
+  scope: rg
+  params: {
+    location: location
+    suffix: suffix
+    tags: tags
+    firewallSubnetId: vnet.outputs.firewallSubnetId
+  }
 }
 
 // ── Monitoring (all services log here) ──
@@ -72,7 +98,9 @@ module database 'modules/database.bicep' = {
   scope: rg
   params: { location: location
     suffix: suffix
-    tags: tags }
+    tags: tags
+    pgSubnetId: enableVnet ? vnet.outputs.pgSubnetId : ''
+    vnetId: enableVnet ? vnet.outputs.vnetId : '' }
 }
 
 // ── Container App Environment (shared by all backend services) ──
@@ -84,10 +112,11 @@ module containerEnv 'modules/container-env.bicep' = {
     suffix: suffix
     tags: tags
     lawClientId: monitoring.outputs.lawClientId
-    lawClientKey: monitoring.outputs.lawClientKey }
+    lawClientKey: monitoring.outputs.lawClientKey
+    caeSubnetId: enableVnet ? vnet.outputs.caeSubnetId : '' }
 }
 
-// ── Frontend (App Service — user-facing web UI) ──
+// ── Frontend (Container App — user-facing web UI) ──
 
 module frontend 'modules/frontend.bicep' = {
   name: 'frontend'
@@ -96,6 +125,10 @@ module frontend 'modules/frontend.bicep' = {
     location: location
     suffix: suffix
     tags: tags
+    envId: containerEnv.outputs.envId
+    acrServer: registry.outputs.acrLoginServer
+    acrName: registry.outputs.acrName
+    acrPassword: registry.outputs.acrPassword
     aiConnStr: monitoring.outputs.aiConnStr
     apiUrl: gateway.outputs.url
     dtOtlpEndpoint: enableDynatrace ? '${dtEnvironmentUrl}/api/v2/otlp' : ''
@@ -195,3 +228,8 @@ output AI_NAME string = monitoring.outputs.aiName
 output ACR_NAME string = registry.outputs.acrName
 output ACR_LOGIN_SERVER string = registry.outputs.acrLoginServer
 output AZURE_CONTAINER_REGISTRY_ENDPOINT string = registry.outputs.acrLoginServer
+output VNET_ID string = enableVnet ? vnet.outputs.vnetId : ''
+output VNET_NAME string = enableVnet ? vnet.outputs.vnetName : ''
+output FIREWALL_NAME string = enableVnet ? firewall.outputs.firewallName : ''
+output FIREWALL_PRIVATE_IP string = enableVnet ? firewall.outputs.firewallPrivateIp : ''
+output FIREWALL_PUBLIC_IP string = enableVnet ? firewall.outputs.firewallPublicIp : ''

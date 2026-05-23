@@ -16,6 +16,9 @@
     },
     "dtApiToken": {
       "value": "${dtApiToken=}"
+    },
+    "enableVnet": {
+      "value": "${enableVnet=true}"
     }
   }
 }
