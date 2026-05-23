@@ -18,20 +18,6 @@ resource vnet 'Microsoft.Network/virtualNetworks@2024-01-01' = {
         }
       }
       {
-        name: 'snet-pg'
-        properties: {
-          addressPrefix: '10.0.9.0/24'
-          delegations: [
-            {
-              name: 'Microsoft.DBforPostgreSQL.flexibleServers'
-              properties: {
-                serviceName: 'Microsoft.DBforPostgreSQL/flexibleServers'
-              }
-            }
-          ]
-        }
-      }
-      {
         name: 'snet-pe'
         properties: {
           addressPrefix: '10.0.10.0/24'
@@ -43,6 +29,20 @@ resource vnet 'Microsoft.Network/virtualNetworks@2024-01-01' = {
           addressPrefix: '10.0.11.0/26'   // /26 minimum for Azure Firewall
         }
       }
+      {
+        name: 'snet-sre-agent'
+        properties: {
+          addressPrefix: '10.0.12.0/28'
+          delegations: [
+            {
+              name: 'Microsoft.App.environments'
+              properties: {
+                serviceName: 'Microsoft.App/environments'
+              }
+            }
+          ]
+        }
+      }
     ]
   }
 }
@@ -50,6 +50,6 @@ resource vnet 'Microsoft.Network/virtualNetworks@2024-01-01' = {
 output vnetId string = vnet.id
 output vnetName string = vnet.name
 output caeSubnetId string = vnet.properties.subnets[0].id
-output pgSubnetId string = vnet.properties.subnets[1].id
-output peSubnetId string = vnet.properties.subnets[2].id
-output firewallSubnetId string = vnet.properties.subnets[3].id
+output peSubnetId string = vnet.properties.subnets[1].id
+output firewallSubnetId string = vnet.properties.subnets[2].id
+output sreAgentSubnetId string = vnet.properties.subnets[3].id

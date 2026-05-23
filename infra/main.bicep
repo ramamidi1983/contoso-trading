@@ -99,7 +99,7 @@ module database 'modules/database.bicep' = {
   params: { location: location
     suffix: suffix
     tags: tags
-    pgSubnetId: enableVnet ? vnet.outputs.pgSubnetId : ''
+    peSubnetId: enableVnet ? vnet.outputs.peSubnetId : ''
     vnetId: enableVnet ? vnet.outputs.vnetId : '' }
 }
 

@@ -49,28 +49,27 @@ All services are inside a Virtual Network with no public endpoints. Azure Firewa
                     │  └──────────────────────────────────────────┘       │
                     │                                                     │
                     │  ┌─────────────────────┐  ┌──────────────────┐     │
-                    │  │ snet-pg (10.0.9.0/24)│  │ AzureFirewall    │     │
-                    │  │  PostgreSQL          │  │ Subnet           │     │
-                    │  │  (delegated, no      │  │ (10.0.11.0/26)  │     │
-                    │  │   public access)     │  │                  │     │
-                    │  └─────────────────────┘  │  ┌────────────┐  │     │
-                    │                            │  │ Azure      │  │     │
-                    │  ┌─────────────────────┐  │  │ Firewall   │──┼──►Internet
-                    │  │ snet-pe             │  │  │ (egress    │  │  (filtered)
-                    │  │ (10.0.10.0/24)      │  │  │  control)  │  │     │
-                    │  │ Private Endpoints   │  │  └────────────┘  │     │
+                    │  │ snet-pe             │  │ AzureFirewall    │     │
+                    │  │ (10.0.10.0/24)      │  │ Subnet           │     │
+                    │  │  PostgreSQL PE ─────┼──┤ (10.0.11.0/26)  │     │
+                    │  │  (private endpoint, │  │                  │     │
+                    │  │   10.0.10.4)        │  │  ┌────────────┐  │     │
+                    │  └─────────────────────┘  │  │ Azure      │  │     │
+                    │                            │  │ Firewall   │──┼──►Internet
+                    │  ┌─────────────────────┐  │  │ (egress    │  │  (filtered)
+                    │  │ snet-sre-agent      │  │  │  control)  │  │     │
+                    │  │ (10.0.12.0/28)      │  │  └────────────┘  │     │
+                    │  │  SRE Agent ─────────┼──┘                  │     │
                     │  └─────────────────────┘  └──────────────────┘     │
                     │                                                     │
                     │  ┌─────────────────────────────────────────┐       │
                     │  │  Private DNS Zones                       │       │
                     │  │  *.thankful...azurecontainerapps.io      │       │
-                    │  │  *.private.postgres.database.azure.com   │       │
+                    │  │  privatelink.postgres.database.azure.com │       │
                     │  └─────────────────────────────────────────┘       │
                     │                                                     │
                     │    Log Analytics + App Insights (public data plane) │
                     └─────────────────────────────────────────────────────┘
-
-  SRE Agent ─── VNet Connection (snet-sre-agent, 10.0.12.0/28) ──► VNet
 ```
 
 ### VNet Subnets
@@ -78,10 +77,19 @@ All services are inside a Virtual Network with no public endpoints. Azure Firewa
 | Subnet | CIDR | Purpose | Delegation |
 |--------|------|---------|------------|
 | `snet-cae` | 10.0.0.0/21 | Container Apps Environment (all 5 services) | — |
-| `snet-pg` | 10.0.9.0/24 | PostgreSQL Flexible Server | `Microsoft.DBforPostgreSQL/flexibleServers` |
-| `snet-pe` | 10.0.10.0/24 | Private Endpoints (future use) | — |
+| `snet-pe` | 10.0.10.0/24 | Private Endpoints (PostgreSQL) | — |
 | `AzureFirewallSubnet` | 10.0.11.0/26 | Azure Firewall | — (Azure-required name) |
 | `snet-sre-agent` | 10.0.12.0/28 | SRE Agent VNet connection | `Microsoft.App/environments` |
+
+### PostgreSQL Networking — Why Private Endpoint?
+
+PostgreSQL Flexible Server supports two mutually exclusive networking modes:
+
+1. **Delegated subnet** (VNet integration) — the server gets a private IP in a delegated subnet. However, Azure-managed networking for delegated subnets **restricts traffic to subnets deployed alongside the server**. Other delegated subnets (like the SRE Agent's `snet-sre-agent`) cannot reach it, even within the same VNet.
+
+2. **Private endpoint** — the server gets a NIC in a regular (non-delegated) subnet. Standard VNet routing applies, so **any subnet in the VNet can reach it**.
+
+We use **private endpoint** (option 2) so that both the container apps in `snet-cae` and the SRE Agent in `snet-sre-agent` can connect to PostgreSQL. The private endpoint lives in `snet-pe` (10.0.10.0/24) with a `privatelink.postgres.database.azure.com` DNS zone that resolves the server FQDN to the PE's private IP.
 
 ### Azure Firewall
 
@@ -99,7 +107,7 @@ When VNet is enabled, Azure Firewall provides:
 | `az containerapp list` (control plane) | Works | Works |
 | `az containerapp restart` (control plane) | Works | Works |
 | `curl frontend/health` (data plane) | **Blocked** — DNS won't resolve | Works |
-| `psql pg-*` (data plane) | **Blocked** — no public access | Works |
+| `psql pg-*` (data plane) | **Blocked** — private endpoint only | Works (via PE in snet-pe) |
 | App Insights queries (data plane) | Works (public API) | Works |
 
 ## Services
