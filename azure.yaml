@@ -12,23 +12,33 @@ services:
     project: ./frontend
     language: js
     host: containerapp
+    docker:
+      remoteBuild: true
 
   gateway:
     project: ./gateway
     language: dotnet
     host: containerapp
+    docker:
+      remoteBuild: true
 
   order-service:
     project: ./order-service
     language: dotnet
     host: containerapp
+    docker:
+      remoteBuild: true
 
   payment-service:
     project: ./payment-service
     language: dotnet
     host: containerapp
+    docker:
+      remoteBuild: true
 
   worker:
     project: ./worker
     language: dotnet
     host: containerapp
+    docker:
+      remoteBuild: true
