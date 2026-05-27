@@ -3,6 +3,12 @@ name: SRE Agent — PR Deployment Guard
 on:
   pull_request:
     types: [opened, synchronize, reopened]
+  workflow_dispatch:
+    inputs:
+      pr_number:
+        description: 'PR number to evaluate'
+        required: true
+        type: string
 
 jobs:
   notify-sre-agent:
@@ -12,19 +18,27 @@ jobs:
         env:
           WEBHOOK_URL: ${{ secrets.SRE_AGENT_WEBHOOK_URL }}
         run: |
+          PR_NUM="${{ github.event.pull_request.number || github.event.inputs.pr_number }}"
+          PR_TITLE="${{ github.event.pull_request.title || 'Manual dispatch' }}"
+          PR_URL="${{ github.event.pull_request.html_url || format('https://github.com/{0}/pull/{1}', github.repository, github.event.inputs.pr_number) }}"
+          PR_AUTHOR="${{ github.event.pull_request.user.login || github.actor }}"
+          HEAD_REF="${{ github.event.pull_request.head.ref || github.ref_name }}"
+          BASE_REF="${{ github.event.pull_request.base.ref || 'main' }}"
+          HEAD_SHA="${{ github.event.pull_request.head.sha || github.sha }}"
+          ACTION="${{ github.event.action || 'opened' }}"
           curl -s -X POST "$WEBHOOK_URL" \
             -H "Content-Type: application/json" \
-            -d '{
-              "event": "pull_request",
-              "action": "${{ github.event.action }}",
-              "pr_number": ${{ github.event.pull_request.number }},
-              "pr_title": "${{ github.event.pull_request.title }}",
-              "pr_url": "${{ github.event.pull_request.html_url }}",
-              "pr_diff_url": "${{ github.event.pull_request.diff_url }}",
-              "pr_author": "${{ github.event.pull_request.user.login }}",
-              "repo": "${{ github.repository }}",
-              "head_ref": "${{ github.event.pull_request.head.ref }}",
-              "base_ref": "${{ github.event.pull_request.base.ref }}",
-              "head_sha": "${{ github.event.pull_request.head.sha }}"
-            }'
+            -d "{
+              \"event\": \"pull_request\",
+              \"action\": \"$ACTION\",
+              \"pr_number\": $PR_NUM,
+              \"pr_title\": \"$PR_TITLE\",
+              \"pr_url\": \"$PR_URL\",
+              \"pr_diff_url\": \"https://github.com/${{ github.repository }}/pull/$PR_NUM.diff\",
+              \"pr_author\": \"$PR_AUTHOR\",
+              \"repo\": \"${{ github.repository }}\",
+              \"head_ref\": \"$HEAD_REF\",
+              \"base_ref\": \"$BASE_REF\",
+              \"head_sha\": \"$HEAD_SHA\"
+            }"
           echo "Webhook sent to SRE Agent"
